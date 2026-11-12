@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ product.sku }} · CheckStock{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Остатки</a> / {{ product.sku }}</div>
+    <h1>{{ product.name }}</h1>
+    <p class="muted">Артикул {{ product.sku }} · карточка «Где товар»</p>
+  </div>
+  <a class="button" href="/operations?product_id={{ product.id }}">Операция с артикулом</a>
+</div>
+
+<section class="card">
+  <h2>Где товар</h2>
+  <table class="compact">
+    <thead><tr><th>Состояние</th><th>ФФ</th><th class="num">Количество</th><th>Документ</th></tr></thead>
+    <tbody>
+      {% for item in locations %}
+        <tr>
+          <td>{{ place_labels.get(item.place, item.place) }}</td>
+          <td>{{ item.warehouse or '—' }}</td>
+          <td class="num strong">{{ item.qty }}</td>
+          <td class="muted">{{ item.doc_type or '—' }}{% if item.doc_id %} #{{ item.doc_id }}{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">Товара нигде нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Последние операции</h2>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead>
+        <tr><th>Дата</th><th>Операция</th><th class="num">Кол-во</th><th>Откуда</th><th>Куда</th><th>Статус</th></tr>
+      </thead>
+      <tbody>
+        {% for movement in movements %}
+          <tr>
+            <td class="muted nowrap">{{ movement.created_at[:19] | replace('T', ' ') }}</td>
+            <td><span class="op">{{ movement.op_label }}</span></td>
+            <td class="num strong">{{ movement.qty }}</td>
+            <td>{{ movement.from_warehouse or place_labels.get(movement.from_place, movement.from_place) }}</td>
+            <td>{{ movement.to_warehouse or place_labels.get(movement.to_place, movement.to_place) }}</td>
+            <td class="muted">{{ movement.status }}<span class="doc">{{ movement.doc_type }} #{{ movement.doc_id }}</span></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="empty">Операций пока нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

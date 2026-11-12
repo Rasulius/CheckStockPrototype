@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}Остатки · CheckStock{% endblock %}
+{% block body_class %}app-shell{% endblock %}
+{% block content %}
+{% set has_reserved = rows|selectattr('totals.reserved', 'gt', 0)|list|length > 0 %}
+{% set per_wh = 3 if has_reserved else 2 %}
+<div class="app-head app-head-left">
+  <a class="button primary" href="/operations?open=1&tab=receipt">Новая операция</a>
+  <div class="app-head-center">
+    <h1>Остатки</h1>
+    <p class="muted">Где физически лежит товар: фактически на складе, доступно и в резерве FBS.</p>
+  </div>
+  <div></div>
+</div>
+
+<section class="card main-card">
+  <div class="toolbar">
+    <input type="search" class="search-input" placeholder="Поиск по артикулу или названию…" data-stock-search="stock-main">
+  </div>
+  <div class="table-wrap">
+    <table class="matrix compact-matrix" id="stock-main">
+      <thead>
+        <tr>
+          <th rowspan="2" class="sticky-col">Артикул</th>
+          <th rowspan="2" class="name-col">Товар</th>
+          {% for warehouse in warehouses %}
+            <th colspan="{{ per_wh }}" class="wh-head">
+              ФФ «{{ warehouse.name }}»
+              {% if warehouse.is_archived %}<span class="badge badge-arch">архив</span>{% endif %}
+            </th>
+          {% endfor %}
+          <th colspan="{{ per_wh }}" class="wh-head total-head">Итого</th>
+        </tr>
+        <tr>
+          {% for warehouse in warehouses %}
+            <th class="num wh-start">Физически</th>
+            <th class="num">Доступно</th>
+            {% if has_reserved %}<th class="num">В резерве FBS</th>{% endif %}
+          {% endfor %}
+          <th class="num wh-start">Физически</th>
+          <th class="num">Доступно</th>
+          {% if has_reserved %}<th class="num">В резерве FBS</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr data-search="{{ (row.product.sku ~ ' ' ~ row.product.name)|lower }}">
+            <td class="sticky-col">
+              <a class="sku" href="/products/{{ row.product.sku }}">{{ row.product.sku }}</a>
+            </td>
+            <td class="name-col">{{ row.product.name }}</td>
+            {% for warehouse in warehouses %}
+              {% set cell = row.cells[warehouse.id] %}
+              <td class="num wh-start">{{ cell.on_hand }}</td>
+              <td class="num strong {{ 'zero' if cell.available == 0 else '' }}">{{ cell.available }}</td>
+              {% if has_reserved %}<td class="num {{ 'zero' if cell.reserved == 0 else 'reserved' }}">{{ cell.reserved }}</td>{% endif %}
+            {% endfor %}
+            <td class="num wh-start">{{ row.totals.on_hand }}</td>
+            <td class="num strong">{{ row.totals.available }}</td>
+            {% if has_reserved %}<td class="num">{{ row.totals.reserved }}</td>{% endif %}
+          </tr>
+        {% else %}
+          <tr><td colspan="{{ 2 + (warehouses|length + 1) * per_wh }}" class="empty">Нет артикулов. Запустите seed.</td></tr>
+        {% endfor %}
+        <tr class="empty-search-row" hidden><td colspan="{{ 2 + (warehouses|length + 1) * per_wh }}" class="empty">Ничего не найдено.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<h2 class="section-title">В движении (транзит)</h2>
+<section class="grid-3 transit">
+  <div class="card">
+    <h2>Товар в пути между ФФ <span class="count">{{ transit.transfers|length }}</span></h2>
+    {% if transit.transfers %}
+      <table class="compact">
+        <thead><tr><th>Маршрут</th><th>Товар</th><th class="num">Кол-во</th><th></th></tr></thead>
+        <tbody>
+        {% for transfer in transit.transfers %}
+          {% for line in transfer.lines %}
+            <tr>
+              <td>{{ transfer.from_warehouse.name }} → {{ transfer.to_warehouse.name }}<span class="doc">#{{ transfer.id }}</span></td>
+              <td>{{ line.product.sku }}<span class="product-name">{{ line.product.name }}</span></td>
+              <td class="num strong">{{ line.qty }}</td>
+              <td class="right">
+                {% if loop.first %}
+                <form method="post" action="/transfers/{{ transfer.id }}/receive">
+                  <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+                  <button class="button small" type="submit">Принять</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">Активных перемещений нет.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Товар в пути на склад маркетплейса (FBO) <span class="count">{{ transit.fbo|length }}</span></h2>
+    {% if transit.fbo %}
+      <table class="compact">
+        <thead><tr><th>Откуда</th><th>Товар</th><th class="num">Кол-во</th><th></th></tr></thead>
+        <tbody>
+        {% for shipment in transit.fbo %}
+          {% for line in shipment.lines %}
+            <tr>
+              <td>{{ shipment.warehouse.name }}<span class="doc">#{{ shipment.id }}</span></td>
+              <td>{{ line.product.sku }}<span class="product-name">{{ line.product.name }}</span></td>
+              <td class="num strong">{{ line.qty }}</td>
+              <td class="right">
+                {% if loop.first %}
+                <form method="post" action="/fbo/{{ shipment.id }}/accept">
+                  <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+                  <button class="button small" type="submit">Принять</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">FBO в пути нет.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Товар в пути к клиенту (FBS) <span class="count">{{ transit.fbs|length }}</span></h2>
+    {% if transit.fbs %}
+      <table class="compact">
+        <thead><tr><th>Откуда</th><th>Товар</th><th class="num">Кол-во</th></tr></thead>
+        <tbody>
+        {% for shipment in transit.fbs %}
+          {% for line in shipment.lines %}
+            <tr>
+              <td>{{ shipment.warehouse.name }}<span class="doc">{{ shipment.external_ref or ('#' ~ shipment.id) }}</span></td>
+              <td>{{ line.product.sku }}<span class="product-name">{{ line.product.name }}</span></td>
+              <td class="num strong">{{ line.qty }}</td>
+            </tr>
+          {% endfor %}
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">Отгруженных FBS нет.</p>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll('[data-stock-search]').forEach(function (input) {
+    var table = document.getElementById(input.dataset.stockSearch);
+    if (!table) return;
+    input.addEventListener('input', function () {
+      var q = (input.value || '').trim().toLowerCase();
+      var rows = table.querySelectorAll('tbody tr[data-search]');
+      var shown = 0;
+      rows.forEach(function (row) {
+        var match = !q || row.dataset.search.indexOf(q) !== -1;
+        row.hidden = !match;
+        if (match) shown += 1;
+      });
+      var empty = table.querySelector('.empty-search-row');
+      if (empty) empty.hidden = shown !== 0 || rows.length === 0;
+    });
+  });
+</script>
+{% endblock %}

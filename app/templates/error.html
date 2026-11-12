@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ error.code }} · CheckStock{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/">Остатки</a> / Ошибка</div>
+    <h1>Операция не выполнена</h1>
+    <p class="muted">Изменения не применены: операция либо проходит целиком, либо не меняет ничего.</p>
+  </div>
+</div>
+
+<section class="card error-card">
+  <div class="error-code">{{ error.code }} · HTTP {{ error.status_code }}</div>
+  <p class="error-message">{{ error.message }}</p>
+
+  {% if error.details %}
+    <details class="details">
+      <summary>Детали</summary>
+      <pre>{{ error.details | tojson(indent=2) }}</pre>
+    </details>
+  {% endif %}
+
+  {% if error.code == 'WAREHOUSE_SHORTAGE' %}
+    {% set alternatives = error.details.get('alternatives', []) %}
+    {% if alternatives %}
+      <h2>Где хватает</h2>
+      <table class="compact">
+        <thead><tr><th>ФФ</th><th class="num">Доступно</th><th></th></tr></thead>
+        <tbody>
+          {% for alternative in alternatives %}
+            <tr>
+              <td><strong>{{ alternative.name }}</strong></td>
+              <td class="num strong">{{ alternative.available }}</td>
+              <td class="right">
+                {% if action in ['/fbs', '/fbo'] and lines %}
+                  <form method="post" action="{{ action }}">
+                    <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+                    <input type="hidden" name="warehouse_id" value="{{ alternative.warehouse_id }}">
+                    {% if external_ref %}<input type="hidden" name="external_ref" value="{{ external_ref }}">{% endif %}
+                    {% for line in lines %}
+                      <input type="hidden" name="product_id" value="{{ line.product_id }}">
+                      <input type="hidden" name="qty" value="{{ line.qty }}">
+                    {% endfor %}
+                    <button class="button small" type="submit">
+                      {{ 'Зарезервировать' if action == '/fbs' else 'Отправить FBO' }} на {{ alternative.name }}
+                    </button>
+                  </form>
+                {% else %}
+                  <span class="muted">подходит как источник</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <div class="error-actions">
+      {% if action == '/fbs' and lines %}
+        <form method="post" action="/fbs/split">
+          <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+          {% for line in lines %}
+            <input type="hidden" name="product_id" value="{{ line.product_id }}">
+            <input type="hidden" name="qty" value="{{ line.qty }}">
+          {% endfor %}
+          <button class="button primary" type="submit">Разделить между ФФ</button>
+        </form>
+      {% endif %}
+      {% if action == '/fbs' and warehouse_id and lines %}
+        <a class="button"
+           href="/operations?tab=transfer&to_warehouse_id={{ warehouse_id }}&product_id={{ lines[0].product_id }}&qty={{ lines[0].qty }}">
+          Создать перемещение на этот ФФ
+        </a>
+      {% endif %}
+      <a class="button ghost" href="/operations">Вернуться к операциям</a>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Удаление ФФ · CheckStock{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/warehouses">Справочник ФФ</a> / Удаление</div>
+    <h1>Удаление ФФ «{{ warehouse.name }}»</h1>
+    <p class="muted">Система проверяет остатки перед удалением склада.</p>
+  </div>
+</div>
+
+{% if warehouse.is_archived %}
+  <section class="card">
+    <h2>ФФ уже в архиве</h2>
+    <p class="muted">Склад «{{ warehouse.name }}» уже удалён (переведён в архив). Остатки и история сохранены.</p>
+    <a class="button" href="/warehouses">Вернуться в справочник</a>
+  </section>
+{% elif has_stock %}
+  <section class="card warning-card">
+    <h2>На складе ещё числится товар</h2>
+    <p>
+      На ФФ «{{ warehouse.name }}» физически <strong>{{ stats.on_hand }}</strong> ед. товара,
+      в резерве FBS — <strong>{{ stats.reserved }}</strong>.
+      Удалить склад с остатками нельзя: сначала переместите товар на другой ФФ.
+    </p>
+    {% if stats.reserved > 0 %}
+      <p class="muted">Зарезервированный товар нужно отправить клиенту или отменить резерв — после этого он станет доступен для перемещения.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Остатки на ФФ</h2>
+    <div class="table-wrap">
+      <table class="compact">
+        <thead>
+          <tr>
+            <th>Артикул</th><th>Товар</th>
+            <th class="num">Физически на складе</th><th class="num">В резерве FBS</th><th class="num">Доступно</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in stock_lines %}
+            <tr>
+              <td><span class="sku">{{ item.product.sku }}</span></td>
+              <td>{{ item.product.name }}</td>
+              <td class="num">{{ item.on_hand }}</td>
+              <td class="num {{ 'zero' if item.reserved == 0 else 'reserved' }}">{{ item.reserved }}</td>
+              <td class="num strong">{{ item.available }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="empty">Остатков нет.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% set movable = stock_lines | selectattr('available', 'gt', 0) | list %}
+  {% if movable and active_warehouses %}
+    <section class="card">
+      <h2>Переместить товар на другой ФФ</h2>
+      <p class="muted">Выберите склад-получатель. Количество можно уменьшить, если перевозите не всё.</p>
+      <form method="post" action="/transfers" class="form">
+        <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+        <input type="hidden" name="from_warehouse_id" value="{{ warehouse.id }}">
+        <input type="hidden" name="return_to" value="/warehouses/{{ warehouse.id }}/delete">
+        <label>Куда
+          <select name="to_warehouse_id" required>
+            <option value="">— ФФ-получатель —</option>
+            {% for destination in active_warehouses %}
+              <option value="{{ destination.id }}">{{ destination.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="table-wrap">
+          <table class="compact">
+            <thead>
+              <tr><th>Артикул</th><th>Товар</th><th class="num">Доступно</th><th class="num">К перемещению</th></tr>
+            </thead>
+            <tbody>
+              {% for item in stock_lines %}
+                <tr>
+                  <td><span class="sku">{{ item.product.sku }}</span></td>
+                  <td>{{ item.product.name }}</td>
+                  <td class="num">{{ item.available }}</td>
+                  <td class="num">
+                    {% if item.available > 0 %}
+                      <input type="hidden" name="product_id" value="{{ item.product.id }}">
+                      <input type="number" name="qty" min="1" max="{{ item.available }}" value="{{ item.available }}">
+                    {% else %}
+                      <span class="muted">0</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="form-actions">
+          <button class="button primary" type="submit">Отправить перемещение</button>
+          <a class="button ghost" href="/warehouses">Отмена</a>
+        </div>
+      </form>
+      <p class="muted small-note">После отправки примите перемещение на ФФ-получателе, затем вернитесь на эту страницу и удалите склад.</p>
+    </section>
+  {% elif movable %}
+    <section class="card">
+      <h2>Нет другого активного ФФ</h2>
+      <p class="muted">Чтобы переместить товар, сначала добавьте ещё один склад в справочнике.</p>
+      <a class="button" href="/warehouses">В справочник ФФ</a>
+    </section>
+  {% endif %}
+{% else %}
+  <section class="card">
+    <h2>Остатков нет</h2>
+    <p class="muted">На ФФ «{{ warehouse.name }}» нет товара. Склад можно удалить — он перейдёт в архив, история сохранится.</p>
+    <form method="post" action="/warehouses/{{ warehouse.id }}/archive">
+      <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+      <div class="form-actions">
+        <button class="button danger" type="submit">Удалить ФФ (в архив)</button>
+        <a class="button ghost" href="/warehouses">Отмена</a>
+      </div>
+    </form>
+  </section>
+{% endif %}
+{% endblock %}

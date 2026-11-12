@@ -1,0 +1,396 @@
+{% extends "base.html" %}
+{% block title %}Склады и движения · CheckStock{% endblock %}
+{% block body_class %}app-shell{% endblock %}
+
+{% macro product_select(products, selected_id=None, name='product_id') %}
+  <select name="{{ name }}">
+    <option value="">— артикул —</option>
+    {% for product in products %}
+      <option value="{{ product.id }}"
+        {% if selected_id and product.id|string == selected_id|string %}selected{% endif %}>
+        {{ product.sku }} · {{ product.name }}
+      </option>
+    {% endfor %}
+  </select>
+{% endmacro %}
+
+{% macro line_rows(products, prefill=None, show_available=False) %}
+  {% set first = prefill if prefill else {} %}
+  <div class="line">
+    {{ product_select(products, first.product_id) }}
+    <div class="qty-cell">
+      <input type="number" name="qty" min="1" step="1" placeholder="Кол-во"
+             value="{{ first.qty if first.qty else '' }}">
+      {% if show_available %}
+        <span class="avail-hint">Остаток: выберите ФФ и артикул</span>
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
+{% block content %}
+{% set has_reserved = stock_rows|selectattr('totals.reserved', 'gt', 0)|list|length > 0 %}
+{% set per_wh = 3 if has_reserved else 2 %}
+<div class="app-head app-head-left">
+  <button type="button" class="button primary" onclick="openDrawer('receipt')">Новая операция</button>
+  <div class="app-head-center">
+    <h1>Склады и движения</h1>
+    <p class="muted">Движения · остатки по ФФ, приход и перемещение.</p>
+  </div>
+  <div></div>
+</div>
+
+<section class="card main-card">
+  <div class="toolbar">
+    <input type="search" class="search-input" placeholder="Поиск по артикулу или названию…" data-stock-search="stock-ops">
+    <div class="toolbar-filters">
+      <label><input type="checkbox" id="filter-reserved"> Только с резервом</label>
+      <label><input type="checkbox" id="filter-transit"> Товары в пути</label>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="matrix compact-matrix compact-actions" id="stock-ops">
+      <thead>
+        <tr>
+          <th rowspan="2" class="sticky-col">Артикул</th>
+          <th rowspan="2" class="name-col">Товар</th>
+          {% for warehouse in stock_warehouses %}
+            <th colspan="{{ per_wh }}" class="wh-head">
+              ФФ «{{ warehouse.name }}»
+              {% if warehouse.is_archived %}<span class="badge badge-arch">архив</span>{% endif %}
+            </th>
+          {% endfor %}
+          <th colspan="{{ per_wh }}" class="wh-head total-head">Итого</th>
+          <th rowspan="2" class="actions-col"></th>
+        </tr>
+        <tr>
+          {% for warehouse in stock_warehouses %}
+            <th class="num wh-start">Физически</th>
+            {% if has_reserved %}<th class="num">Резерв</th>{% endif %}
+            <th class="num">Доступно</th>
+          {% endfor %}
+          <th class="num wh-start">Физически</th>
+          {% if has_reserved %}<th class="num">Резерв</th>{% endif %}
+          <th class="num">Доступно</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in stock_rows %}
+          {% set in_transit_row = row.product.id in transit_product_ids %}
+          <tr data-search="{{ (row.product.sku ~ ' ' ~ row.product.name)|lower }}"
+              data-reserved="{{ 1 if row.totals.reserved > 0 else 0 }}"
+              data-transit="{{ 1 if in_transit_row else 0 }}"
+              data-product-id="{{ row.product.id }}"
+              data-sku="{{ row.product.sku }}">
+            <td class="sticky-col">
+              <a class="sku" href="/products/{{ row.product.sku }}">{{ row.product.sku }}</a>
+            </td>
+            <td class="name-col">{{ row.product.name }}</td>
+            {% for warehouse in stock_warehouses %}
+              {% set cell = row.cells[warehouse.id] %}
+              <td class="num wh-start">{{ cell.on_hand }}</td>
+              {% if has_reserved %}<td class="num {{ 'zero' if cell.reserved == 0 else 'reserved' }}">{{ cell.reserved }}</td>{% endif %}
+              <td class="num strong {{ 'zero' if cell.available == 0 else '' }}">{{ cell.available }}</td>
+            {% endfor %}
+            <td class="num wh-start">{{ row.totals.on_hand }}</td>
+            {% if has_reserved %}<td class="num {{ 'reserved' if row.totals.reserved > 0 else 'zero' }}">{{ row.totals.reserved }}</td>{% endif %}
+            <td class="num strong">{{ row.totals.available }}</td>
+            <td class="actions-col">
+              <div class="row-menu">
+                <button type="button" class="icon-btn" aria-label="Действия" onclick="toggleRowMenu(this)">⋯</button>
+                <div class="menu-popup">
+                  <button type="button" onclick="rowAction(this, 'receipt')">Оформить приход</button>
+                  <button type="button" onclick="rowAction(this, 'transfer')">Переместить</button>
+                  <a href="/fbs-fbo?tab=fbs&product_id={{ row.product.id }}">Резерв FBS</a>
+                </div>
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="{{ 3 + (stock_warehouses|length + 1) * per_wh }}" class="empty">Нет артикулов. Запустите seed.</td></tr>
+        {% endfor %}
+        <tr class="empty-search-row" hidden><td colspan="{{ 3 + (stock_warehouses|length + 1) * per_wh }}" class="empty">Ничего не найдено.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<aside class="drawer" id="ops-drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <h2 id="drawer-title">Новая операция</h2>
+    <button type="button" class="drawer-close" onclick="closeDrawer()" aria-label="Закрыть">×</button>
+  </div>
+  <div class="drawer-body">
+    <div class="tabs" role="tablist">
+      <button class="tab" data-tab="receipt" onclick="showTab('receipt')">Приход</button>
+      <button class="tab" data-tab="transfer" onclick="showTab('transfer')">Перемещение</button>
+    </div>
+
+    <section class="tab-panel" id="tab-receipt">
+      <p class="muted">Товар появляется только через приход. Количество — целое больше нуля.</p>
+      <form method="post" action="/receipts" class="form" id="form-receipt">
+        <input type="hidden" name="idempotency_key" value="{{ keys.receipt }}">
+        <label>Склад
+          <select name="warehouse_id" required>
+            <option value="">— выберите ФФ —</option>
+            {% for warehouse in active_warehouses %}
+              <option value="{{ warehouse.id }}">{{ warehouse.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="lines">{{ line_rows(products, None, False) }}</div>
+        <button type="button" class="button ghost" onclick="addLine(this)">+ Строка</button>
+        <label>Комментарий
+          <input type="text" name="comment" placeholder="Необязательно" maxlength="200">
+        </label>
+        <div class="form-actions"><button class="button primary" type="submit">Оформить приход</button></div>
+      </form>
+    </section>
+
+    <section class="tab-panel" id="tab-transfer">
+      <p class="muted">Отправка списывает доступный товар с ФФ-отправителя. Зарезервированное не уезжает.</p>
+      <form method="post" action="/transfers" class="form" id="form-transfer" data-availability-form>
+        <input type="hidden" name="idempotency_key" value="{{ keys.transfer }}">
+        <div class="form-grid">
+          <label>Откуда
+            <select name="from_warehouse_id" required data-warehouse>
+              <option value="">— ФФ-отправитель —</option>
+              {% for warehouse in all_warehouses %}
+                <option value="{{ warehouse.id }}">
+                  {{ warehouse.name }}{% if warehouse.is_archived %} (архив){% endif %}
+                </option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Куда
+            <select name="to_warehouse_id" required>
+              <option value="">— ФФ-получатель —</option>
+              {% for warehouse in active_warehouses %}
+                <option value="{{ warehouse.id }}">{{ warehouse.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <div class="lines">{{ line_rows(products, None, True) }}</div>
+        <button type="button" class="button ghost" onclick="addLine(this)">+ Строка</button>
+        <div class="form-actions"><button class="button primary" type="submit">Отправить перемещение</button></div>
+      </form>
+    </section>
+  </div>
+</aside>
+
+<script>
+  const AVAILABILITY = {{ availability | tojson }};
+  const TRANSIT_PRODUCT_IDS = new Set({{ transit_product_ids | tojson }});
+
+  function openDrawer(tab) {
+    document.getElementById('drawer-overlay').hidden = false;
+    requestAnimationFrame(function () {
+      document.getElementById('drawer-overlay').classList.add('visible');
+      document.getElementById('ops-drawer').classList.add('open');
+    });
+    document.getElementById('ops-drawer').setAttribute('aria-hidden', 'false');
+    showTab(tab || 'receipt');
+  }
+  function closeDrawer() {
+    document.getElementById('ops-drawer').classList.remove('open');
+    document.getElementById('drawer-overlay').classList.remove('visible');
+    document.getElementById('ops-drawer').setAttribute('aria-hidden', 'true');
+    setTimeout(function () { document.getElementById('drawer-overlay').hidden = true; }, 250);
+    document.querySelectorAll('.menu-popup.open').forEach(function (m) { m.classList.remove('open'); });
+  }
+  var _overlay = document.getElementById('drawer-overlay');
+  if (_overlay) _overlay.addEventListener('click', closeDrawer);
+
+  function toggleRowMenu(btn) {
+    var popup = btn.nextElementSibling;
+    var open = popup.classList.contains('open');
+    document.querySelectorAll('.menu-popup.open').forEach(function (m) { m.classList.remove('open'); });
+    if (!open) popup.classList.add('open');
+  }
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.row-menu')) {
+      document.querySelectorAll('.menu-popup.open').forEach(function (m) { m.classList.remove('open'); });
+    }
+  });
+
+  function prefillForm(form, opts) {
+    if (!form) return;
+    var firstLine = form.querySelector('.line');
+    if (opts.productId && firstLine) {
+      var sel = firstLine.querySelector('select[name="product_id"]');
+      if (sel) sel.value = String(opts.productId);
+      var qty = firstLine.querySelector('input[name="qty"]');
+      if (qty && opts.qty) qty.value = String(opts.qty);
+    }
+    if (opts.warehouseId) {
+      var wh = form.querySelector('select[name="warehouse_id"]');
+      if (wh) wh.value = String(opts.warehouseId);
+    }
+    if (opts.fromWarehouseId) {
+      var from = form.querySelector('select[name="from_warehouse_id"]');
+      if (from) from.value = String(opts.fromWarehouseId);
+    }
+    if (form.hasAttribute('data-availability-form')) updateForm(form);
+  }
+
+  function rowAction(el, tab) {
+    var row = el.closest('tr');
+    var productId = row ? row.dataset.productId : '';
+    var menu = el.closest('.menu-popup');
+    if (menu) menu.classList.remove('open');
+    openDrawer(tab);
+    var form = document.getElementById('form-' + tab);
+    // clear first line
+    if (form) {
+      form.querySelectorAll('.line').forEach(function (line, i) {
+        line.querySelectorAll('select,input').forEach(function (f) { f.value = ''; });
+        var hint = line.querySelector('.avail-hint');
+        if (hint) { hint.textContent = 'Остаток: выберите ФФ и артикул'; hint.classList.remove('avail-error'); }
+      });
+      prefillForm(form, { productId: productId });
+    }
+  }
+
+  function showTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(function (panel) {
+      panel.classList.toggle('visible', panel.id === 'tab-' + name);
+    });
+    document.querySelectorAll('.drawer .tab').forEach(function (tab) {
+      tab.classList.toggle('active', tab.dataset.tab === name);
+    });
+  }
+
+  function availableFor(form, productId) {
+    var warehouse = form.querySelector('[data-warehouse]');
+    if (!warehouse || !warehouse.value || !productId) return null;
+    var byWarehouse = AVAILABILITY[warehouse.value];
+    if (!byWarehouse) return 0;
+    return byWarehouse[productId] || 0;
+  }
+
+  function updateLine(form, line) {
+    var qty = line.querySelector('input[name="qty"]');
+    var hint = line.querySelector('.avail-hint');
+    if (!qty || !hint) return;
+    var product = line.querySelector('select[name="product_id"]');
+    var available = availableFor(form, product ? product.value : '');
+    if (available === null) {
+      hint.textContent = 'Остаток: выберите ФФ и артикул';
+      hint.classList.remove('avail-error');
+      qty.removeAttribute('max');
+      qty.setCustomValidity('');
+      return;
+    }
+    var value = Number(qty.value || 0);
+    qty.max = available;
+    if (!qty.value) {
+      qty.setCustomValidity('');
+    } else if (available <= 0) {
+      qty.setCustomValidity('На выбранном ФФ нет доступного товара.');
+    } else if (value > available) {
+      qty.setCustomValidity('Доступно только ' + available + ' шт.');
+    } else {
+      qty.setCustomValidity('');
+    }
+    if (available <= 0) {
+      hint.textContent = 'Остаток: 0 шт.';
+    } else if (value > available) {
+      hint.textContent = 'Остаток: ' + available + ' шт. — уменьшите количество';
+    } else {
+      hint.textContent = 'Остаток: ' + available + ' шт.';
+    }
+    hint.classList.toggle('avail-error', available <= 0 || value > available);
+  }
+
+  function updateForm(form) {
+    var lines = Array.from(form.querySelectorAll('.line'));
+    var counts = {};
+    lines.forEach(function (line) {
+      var product = line.querySelector('select[name="product_id"]');
+      var qty = line.querySelector('input[name="qty"]');
+      if (product && product.value && qty && qty.value) {
+        counts[product.value] = (counts[product.value] || 0) + 1;
+      }
+    });
+    lines.forEach(function (line) {
+      updateLine(form, line);
+      var product = line.querySelector('select[name="product_id"]');
+      var qty = line.querySelector('input[name="qty"]');
+      var hint = line.querySelector('.avail-hint');
+      if (product && product.value && qty && qty.value && counts[product.value] > 1) {
+        qty.setCustomValidity('Этот артикул уже выбран в другой строке.');
+        if (hint) { hint.textContent = 'Артикул повторяется в документе'; hint.classList.add('avail-error'); }
+      }
+    });
+  }
+
+  function addLine(button) {
+    var form = button.closest('form');
+    var lines = form.querySelector('.lines');
+    var row = lines.querySelector('.line');
+    var clone = row.cloneNode(true);
+    clone.querySelectorAll('select,input').forEach(function (field) { field.value = ''; });
+    clone.querySelectorAll('input[name="qty"]').forEach(function (qty) { qty.removeAttribute('max'); qty.setCustomValidity(''); });
+    clone.querySelectorAll('.avail-hint').forEach(function (hint) { hint.textContent = 'Остаток: выберите ФФ и артикул'; hint.classList.remove('avail-error'); });
+    lines.appendChild(clone);
+    if (form.hasAttribute('data-availability-form')) updateForm(form);
+  }
+
+  document.querySelectorAll('[data-availability-form]').forEach(function (form) {
+    form.addEventListener('change', function () { updateForm(form); });
+    form.addEventListener('input', function () { updateForm(form); });
+    form.addEventListener('submit', function (event) {
+      updateForm(form);
+      if (!form.checkValidity()) { event.preventDefault(); form.reportValidity(); }
+    });
+  });
+
+  function applyStockFilters() {
+    var table = document.getElementById('stock-ops');
+    if (!table) return;
+    var searchEl = document.querySelector('[data-stock-search="stock-ops"]');
+    var q = ((searchEl && searchEl.value) || '').trim().toLowerCase();
+    var reservedEl = document.getElementById('filter-reserved');
+    var transitEl = document.getElementById('filter-transit');
+    var onlyReserved = !!(reservedEl && reservedEl.checked);
+    var onlyTransit = !!(transitEl && transitEl.checked);
+    var rows = table.querySelectorAll('tbody tr[data-search]');
+    var shown = 0;
+    rows.forEach(function (row) {
+      var match = !q || row.dataset.search.indexOf(q) !== -1;
+      if (onlyReserved && row.dataset.reserved !== '1') match = false;
+      if (onlyTransit && row.dataset.transit !== '1') match = false;
+      row.hidden = !match;
+      if (match) shown += 1;
+    });
+    var empty = table.querySelector('.empty-search-row');
+    if (empty) empty.hidden = shown !== 0 || rows.length === 0;
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var search = document.querySelector('[data-stock-search="stock-ops"]');
+    if (search) search.addEventListener('input', applyStockFilters);
+    ['filter-reserved', 'filter-transit'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', applyStockFilters);
+    });
+    var params = new URLSearchParams(window.location.search);
+    var open = params.get('open');
+    var tab = params.get('tab') || 'receipt';
+    if (open === '1') openDrawer(tab);
+    else showTab(tab);
+    var prefill = {{ prefill | tojson }};
+    if (prefill && prefill.product_id) {
+      openDrawer(prefill.tab || 'receipt');
+      var form = document.getElementById('form-' + (prefill.tab || 'receipt'));
+      prefillForm(form, {
+        productId: prefill.product_id,
+        warehouseId: prefill.warehouse_id,
+        fromWarehouseId: prefill.from_warehouse_id,
+        qty: prefill.qty
+      });
+    }
+  });
+</script>
+{% endblock %}

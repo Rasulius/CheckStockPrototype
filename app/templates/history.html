@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Журнал движений · CheckStock{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Журнал движений</h1>
+    <p class="muted">Приход, отправка, перемещение между ФФ и приёмка. Журнал только на добавление: записи нельзя изменить или удалить — это проверяется триггером в PostgreSQL.</p>
+  </div>
+</div>
+
+<section class="card">
+  <form method="get" action="/history" class="filters">
+    <label>Артикул
+      <input type="text" name="sku" value="{{ filters.sku }}" placeholder="SKU-101">
+    </label>
+    <label>ФФ
+      <select name="warehouse_id">
+        <option value="">— все —</option>
+        {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}"
+            {% if filters.warehouse_id == warehouse.id %}selected{% endif %}>
+            {{ warehouse.name }}{% if warehouse.is_archived %} (архив){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Операция
+      <select name="op_type">
+        <option value="">— все —</option>
+        {% for value, label in op_types %}
+          <option value="{{ value }}" {% if filters.op_type == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>С даты
+      <input type="date" name="date_from" value="{{ filters.date_from }}">
+    </label>
+    <label>По дату
+      <input type="date" name="date_to" value="{{ filters.date_to }}">
+    </label>
+    <button class="button primary" type="submit">Показать</button>
+    <a class="button ghost" href="/history">Сбросить</a>
+  </form>
+</section>
+
+<section class="card">
+  <div class="table-wrap">
+    <table class="compact">
+      <thead>
+        <tr>
+          <th>Дата</th><th>Операция</th><th>Артикул</th><th class="num">Количество</th>
+          <th>Откуда</th><th>Куда</th><th>Статус</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for movement in movements %}
+          <tr>
+            <td class="muted nowrap">{{ movement.created_at[:19] | replace('T', ' ') }}</td>
+            <td><span class="op">{{ movement.op_label }}</span></td>
+            <td>
+              <a class="sku" href="/products/{{ movement.sku }}">{{ movement.sku }}</a>
+              <span class="product-name">{{ movement.product }}</span>
+            </td>
+            <td class="num strong">{{ movement.qty }}</td>
+            <td>
+              {% if movement.from_warehouse %}{{ movement.from_warehouse }}{% else %}{{ place_labels.get(movement.from_place, movement.from_place) }}{% endif %}
+            </td>
+            <td>
+              {% if movement.to_warehouse %}{{ movement.to_warehouse }}{% else %}{{ place_labels.get(movement.to_place, movement.to_place) }}{% endif %}
+            </td>
+            <td>
+              <span class="status">{{ movement.status }}</span>
+              <span class="doc">{{ movement.doc_type }} #{{ movement.doc_id }}</span>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="empty">Операций по фильтру нет.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
